@@ -19,7 +19,7 @@ def train_layer(
   epochs: int,
   theta: int,
   goodness_fn: Callable
-):
+) -> Tuple[TrainState, chex.Array]:
 
   @value_and_grad
   @partial(jit, static_argnums=(3,))
@@ -47,19 +47,22 @@ def train_layer(
         params = params['params']
     )
   
+  loss_list = []
   for epoch in range(epochs):
     key, subkey = jax.random.split(key, 2)
     X_pos, X_neg = prep_input(subkey, X, y)
     key, loss_val, state = train_step(subkey, X_pos, X_neg, state, goodness_fn)
-    if epoch % 10 == 0: print(f'Epoch {epoch}, loss: {loss_val}')
+    loss_list.append(loss_val)
+    if epoch % 10 == 0: print(f'\t\tEpoch {epoch}, loss value: {loss_val}')
 
   # Get out to feed to next layer
   X_in, _ = prep_input(subkey, X, y)
   X_out = state.apply_fn({'params': state.params}, X_in)
 
-  return state, X_out
+  return state, X_out, loss_list
 
 TrainedNet = List[TrainState]
+LossList = List[List]
 
 def train(
   key: KeyArray,
@@ -71,14 +74,16 @@ def train(
   goodness_fn: Callable
 ) -> TrainedNet:
   _X = X
-  trained = []
+  trained, loss = [], []
 
   # Train all Network Layers
-  for l in net:
-    state, _X = train_layer(key, _X, y, l, epochs, theta, goodness_fn)
+  for idx, l in enumerate(net):
+    print(f'\tTraining Layer {idx + 1}:')
+    state, _X, loss_list = train_layer(key, _X, y, l, epochs, theta, goodness_fn)
     trained.append(state)
+    loss.append(loss_list)
   
-  return trained
+  return trained, loss_list
 
 def predict(
   trainedNet: TrainedNet,
@@ -88,7 +93,7 @@ def predict(
 
   @jit
   def accuracy(y_preds, y_true):
-    return jnp.where(y_preds, y_true, 1, 0).sum() / 100
+    return jnp.where(y_preds == y_true, 1, 0).sum() / 100
 
   # Get Layer activations for all labels
   layer_activations = []
@@ -96,16 +101,21 @@ def predict(
     y_sgl = jnp.full(y.shape, label)
     X_t = overlay(X, y_sgl)
 
+
+    # TODO: Need to add if statement here to ensure that
+    # If first state:
+      # Use X_t
+    # else:
+      # Use previous layers activations
     activations = []
     for state in trainedNet:
       A_t = state.apply_fn({'params': state.params}, X_t)
       activations.append(A_t)
     
     layer_activations.append(activations)
-  
-  # Find maximum overall activation over all layers per example
+
   overall = []
-  for lab in activations:
+  for lab in layer_activations:
     overall.append(jnp.sum(jnp.vstack([jnp.sum(i, axis = 1) for i in lab]), axis = 0))
 
   preds = jnp.argmax(jnp.vstack(overall), axis = 0)

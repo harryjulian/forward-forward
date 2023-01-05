@@ -2,12 +2,13 @@ from typing import Tuple, List
 from functools import partial
 
 import jax
+import jax.numpy as jnp
 from jax import jit, value_and_grad
 from jax.random import KeyArray
 import chex
 from flax.training.train_state import TrainState
 
-from .data import prep_input
+from .data import prep_input, overlay
 from .network import ForwardForwardLayer, Network
 
 def train_layer(
@@ -16,8 +17,7 @@ def train_layer(
   y: chex.Array,
   fflayer: ForwardForwardLayer,
   epochs: int,
-  theta: int, 
-  flat_shape: Tuple[int] = (784,)
+  theta: int,
 ):
 
   @value_and_grad
@@ -36,7 +36,7 @@ def train_layer(
     state = state.apply_gradients(grads=grads)
     return subkey, loss_val, state
 
-  X_init = jax.random.normal(key, flat_shape)
+  X_init = jax.random.normal(key, X.shape[1])
   layer, optimizer = fflayer
   params = layer.init(key, X_init)
 
@@ -71,38 +71,28 @@ def train(key: KeyArray, net: Network, X: chex.Array, y: chex.Array, epochs: int
   
   return trained
 
-def predict(trained: TrainedNet, X: chex.Array, y: chex.Array) -> chex.Array:
-  pass
+def predict(
+  trainedNet: TrainedNet,
+  X: chex.Array,
+  y: chex.Array,
+):
 
-# def predict(
-#   X: Array,
-#   y: Array,
-#   network: Network,
-# ):
-#   """Make predictions using current weights and biases.
+  # Get Layer activations for all labels
+  layer_activations = []
+  for label in jnp.unique(y):
+    y_sgl = jnp.full(y.shape, label)
+    X_t = overlay(X, y_sgl)
 
-#   Here, we record activations for each i) layer and ii) each
-#   possible label on each example. The label which gets the highest
-#   cumulative activations across all layers is the models prediction.
-  
-#   Args:
-#     X: jnp.array
-#     y: jnp.array
-#     network: list[ForwardForwardLayer]
-
-#   Returns:
-#     y_preds: jnp.array
-#   """
-#   preds = []
-#   for label in jnp.unique(y):
-#     label_arr = jnp.full(y.shape, label)
-#     X_t = overlay_and_flatten(X, label_arr)
-
-#     activations = []
-#     for layer in network:
-#       A_t = forward(X_t, weights, biases)
-#       activations.append(A_t)
+    activations = []
+    for state in trainedNet:
+      A_t = state.apply_fn({'params': state.params}, X_t)
+      activations.append(A_t)
     
-#     preds.append(jnp.sum(activations))
+    layer_activations.append(activations)
   
-#   return jnp.argmax(jnp.concatenate(preds), axis = 1)
+  # Find maximum overall activation over all layers per example
+  overall = []
+  for lab in activations:
+    overall.append(jnp.sum(jnp.vstack([jnp.sum(i, axis = 1) for i in lab]), axis = 0))
+
+  return jnp.argmax(jnp.vstack(overall), axis = 0)

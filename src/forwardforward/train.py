@@ -36,7 +36,7 @@ def train_layer(
     state = state.apply_gradients(grads=grads)
     return subkey, loss_val, state
 
-  X_init = jax.random.normal(key, X.shape[1])
+  X_init = jax.random.normal(key, (X.shape[1],))
   layer, optimizer = fflayer
   params = layer.init(key, X_init)
 
@@ -75,7 +75,11 @@ def predict(
   trainedNet: TrainedNet,
   X: chex.Array,
   y: chex.Array,
-):
+) -> Tuple[chex.Array, float]:
+
+  @jit
+  def accuracy(y_preds, y_true):
+    return jnp.where(y_preds, y_true, 1, 0).sum() / 100
 
   # Get Layer activations for all labels
   layer_activations = []
@@ -95,4 +99,5 @@ def predict(
   for lab in activations:
     overall.append(jnp.sum(jnp.vstack([jnp.sum(i, axis = 1) for i in lab]), axis = 0))
 
-  return jnp.argmax(jnp.vstack(overall), axis = 0)
+  preds = jnp.argmax(jnp.vstack(overall), axis = 0)
+  return preds, accuracy(preds, y)

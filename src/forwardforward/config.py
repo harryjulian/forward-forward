@@ -1,4 +1,4 @@
-from typing import Callable, Sequence, Tuple, Union
+from typing import Optional, Callable, Sequence, Tuple, Union
 from dataclasses import dataclass
 
 @dataclass
@@ -12,3 +12,4 @@ class Config:
   goodness_fn: Callable
   l: int
   save: bool = False
+  expname: Optional[str] = None

@@ -1,4 +1,4 @@
-from typing import Tuple, List
+from typing import Callable, Tuple, List
 from functools import partial
 
 import jax
@@ -18,6 +18,7 @@ def train_layer(
   fflayer: ForwardForwardLayer,
   epochs: int,
   theta: int,
+  goodness_fn: Callable
 ):
 
   @value_and_grad
@@ -29,10 +30,10 @@ def train_layer(
     loss_neg = (goodness_fn(A_neg) - theta)
     return (loss_pos + loss_neg).mean()
 
-  @jit
-  def train_step(inkey, X_pos, X_neg, state):
+  @partial(jit, static_argnums = (4,))
+  def train_step(inkey, X_pos, X_neg, state, goodness_fn):
     inkey, subkey = jax.random.split(inkey, 2)
-    loss_val, grads = loss(state.params, X_pos, X_neg)
+    loss_val, grads = loss(state.params, X_pos, X_neg, goodness_fn)
     state = state.apply_gradients(grads=grads)
     return subkey, loss_val, state
 
@@ -49,7 +50,7 @@ def train_layer(
   for epoch in range(epochs):
     key, subkey = jax.random.split(key, 2)
     X_pos, X_neg = prep_input(subkey, X, y)
-    key, loss_val, state = train_step(subkey, X_pos, X_neg, state)
+    key, loss_val, state = train_step(subkey, X_pos, X_neg, state, goodness_fn)
     if epoch % 10 == 0: print(f'Epoch {epoch}, loss: {loss_val}')
 
   # Get out to feed to next layer
@@ -60,13 +61,21 @@ def train_layer(
 
 TrainedNet = List[TrainState]
 
-def train(key: KeyArray, net: Network, X: chex.Array, y: chex.Array, epochs: int, theta: int) -> TrainedNet:
+def train(
+  key: KeyArray,
+  net: Network,
+  X: chex.Array,
+  y: chex.Array,
+  epochs: int,
+  theta: int,
+  goodness_fn: Callable
+) -> TrainedNet:
   _X = X
   trained = []
 
   # Train all Network Layers
   for l in net:
-    state, _X = train_layer(key, _X, y, l, epochs, theta)
+    state, _X = train_layer(key, _X, y, l, epochs, theta, goodness_fn)
     trained.append(state)
   
   return trained

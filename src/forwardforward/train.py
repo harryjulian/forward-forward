@@ -102,14 +102,15 @@ def predict(
     X_t = overlay(X, y_sgl)
 
 
-    # TODO: Need to add if statement here to ensure that
-    # If first state:
-      # Use X_t
-    # else:
-      # Use previous layers activations
     activations = []
-    for state in trainedNet:
-      A_t = state.apply_fn({'params': state.params}, X_t)
+
+    # Get First Layer Activations
+    A_t = trainedNet[0].apply_fn({'params': trainedNet[0].params}, X_t)
+    activations.append(A_t)
+    
+    # Get Remaining Layer Activations
+    for state in trainedNet[1:]:
+      A_t = state.apply_fn({'params': state.params}, A_t)
       activations.append(A_t)
     
     layer_activations.append(activations)

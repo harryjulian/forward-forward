@@ -10,11 +10,11 @@ vanillacfg = Config(
   epochs = 100,
   learning_rate = 0.01,
   theta = 2,
-  activation_fn = jax.nn.relu,
+  activation_fn = jax.nn.gelu,
   goodness_fn = gof_og,
   l = 25,
-  save = True,
-  expname = 'vanilla'
+  save = False,
+  expname = 'vanillagelu'
 )
 
 if __name__ == '__main__':

@@ -34,7 +34,17 @@ def main(cfg: Config):
 
   # Train
   print('Training Network.')
-  trained, loss_list = train(key, net, X_train, y_train, cfg.epochs, cfg.theta, cfg.goodness_fn)
+  trained, loss_list = train(
+    key,
+    net,
+    X_train,
+    y_train,
+    cfg.epochs,
+    cfg.theta,
+    cfg.batch_size,
+    cfg.l,
+    cfg.goodness_fn
+  )
 
   # Make Preds
   print('Making Predictions.')

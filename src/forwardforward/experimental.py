@@ -9,7 +9,7 @@ import chex
 @jit
 def gof_og(a: chex.Array) -> chex.Array:
   """Goodness of fit as the sum of squares of activations."""
-  return (a ** 2).sum()
+  return (a ** 2).sum(axis = 1)
 
 @partial(jit, static_argnums = 3)
 def loss_og(

@@ -8,6 +8,7 @@ class Config:
   epochs: int
   learning_rate: float
   theta: Union[int, float]
+  batch_size: int
   activation_fn: Callable
   goodness_fn: Callable
   l: int

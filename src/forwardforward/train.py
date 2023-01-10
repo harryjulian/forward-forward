@@ -8,7 +8,7 @@ from jax.random import KeyArray
 import chex
 from flax.training.train_state import TrainState
 
-from .data import prep_input, overlay
+from .data import batch_generator, prep_input, overlay
 from .network import ForwardForwardLayer, Network
 
 def train_layer(
@@ -18,45 +18,74 @@ def train_layer(
   fflayer: ForwardForwardLayer,
   epochs: int,
   theta: int,
+  batch_size: int,
+  l: int,
   goodness_fn: Callable
 ) -> Tuple[TrainState, chex.Array]:
-
+  """Train single layer of the network, with it's own independent
+  optimization process.
+  
+  Args:
+    key: PRNGKey
+    X: examples
+    y: labels.
+    fflayer: layer to be trained.
+    epochs: n epochs.
+    theta: threshold.
+    batch_size: n batches to split the training data into.
+    l: n indices used as the label in each example.
+    goodness_fn: function used to compute goodness of fit.
+  
+  Returns:
+    state: fitted flax.training.TrainState object
+    X_out: Activations as a result of X_pos being fed 
+      through the trained layer.
+    loss_list: loss in every epoch
+  """
   @value_and_grad
   @partial(jit, static_argnums=(3,))
   def loss(params, X_pos, X_neg, goodness_fn):
     A_pos = state.apply_fn({'params': params}, X_pos)
     A_neg = state.apply_fn({'params': params}, X_neg)
-    loss_pos = -(goodness_fn(A_pos) - theta)
-    loss_neg = (goodness_fn(A_neg) - theta)
-    return (loss_pos + loss_neg).mean()
+    loss_pos = ((-jnp.power(A_pos, 2).mean(axis = 1)) + theta)
+    loss_neg = ((jnp.power(A_neg, 2).mean(axis = 1)) - theta)
+    return jnp.log(1 + jnp.exp((loss_pos + loss_neg))).mean()
 
   @partial(jit, static_argnums = (4,))
   def train_step(inkey, X_pos, X_neg, state, goodness_fn):
     inkey, subkey = jax.random.split(inkey, 2)
-    loss_val, grads = loss(state.params, X_pos, X_neg, goodness_fn)
-    state = state.apply_gradients(grads=grads)
-    return subkey, loss_val, state
+    loss_val, g = loss(state.params, X_pos, X_neg, goodness_fn)
+    new_state = state.apply_gradients(grads=g)
+    return subkey, loss_val, new_state
 
+  # Initialise Model
   X_init = jax.random.normal(key, (X.shape[1],))
   layer, optimizer = fflayer
   params = layer.init(key, X_init)
-
   state = TrainState.create(
         apply_fn = layer.apply,
         tx = optimizer,
         params = params['params']
     )
-  
+
+  # Run all Epochs
   loss_list = []
   for epoch in range(epochs):
     key, subkey = jax.random.split(key, 2)
-    X_pos, X_neg = prep_input(subkey, X, y)
-    key, loss_val, state = train_step(subkey, X_pos, X_neg, state, goodness_fn)
-    loss_list.append(loss_val)
-    if epoch % 10 == 0: print(f'\t\tEpoch {epoch}, loss value: {loss_val}')
+    batch_gen = batch_generator(subkey, X, y, l, batch_size)
+
+    # Run all batches within Epoch
+    batch_loss = []
+    for X_pos, X_neg in batch_gen:
+      key, loss_val, state = train_step(subkey, X_pos, X_neg, state, goodness_fn)
+      loss_list.append(loss_val)
+    
+    # Get cross batch loss
+    loss_list.append(jnp.sum(jnp.array(batch_loss)))
+    print(f'\t\tEpoch {epoch}, loss value: {loss_val}')
 
   # Get out to feed to next layer
-  X_in, _ = prep_input(subkey, X, y)
+  X_in, _ = prep_input(subkey, X, y, l)
   X_out = state.apply_fn({'params': state.params}, X_in)
 
   return state, X_out, loss_list
@@ -71,16 +100,47 @@ def train(
   y: chex.Array,
   epochs: int,
   theta: int,
+  batch_size: int,
+  l: int,
   goodness_fn: Callable
 ) -> TrainedNet:
+  """Train the full network.
+  
+  Args:
+    key: PRNGKey
+    net: network
+    X: training examples
+    y: training labels
+    epochs: n epochs to train each layer for
+    theta: threshold
+    batch_size: size of each batch
+    l: n indices used for the label in each training image
+    goodness_fn: function used to compute goodness of fit in 
+      every layer
+    
+  Returns:
+    trained: list of fitted train states
+    loss_list: list of lists describing loss in each layer
+      of the network at every epoch
+  """
   _X = X
   trained, loss = [], []
 
   # Train all Network Layers
-  for idx, l in enumerate(net):
+  for idx, layer in enumerate(net):
     print(f'\tTraining Layer {idx + 1}:')
-    state, _X, loss_list = train_layer(key, _X, y, l, epochs, theta, goodness_fn)
-    trained.append(state)
+    trained_state, _X, loss_list = train_layer(
+      key, 
+      _X,
+      y,
+      layer,
+      epochs,
+      theta,
+      batch_size,
+      l,
+      goodness_fn
+    )
+    trained.append(trained_state)
     loss.append(loss_list)
   
   return trained, loss_list
@@ -90,6 +150,17 @@ def predict(
   X: chex.Array,
   y: chex.Array,
 ) -> Tuple[chex.Array, float]:
+  """Make predicitions using a fitted network.
+  
+  Args:
+    trainedNet: fitted network, return from the train method
+    X: test examples
+    y: test labels
+  
+  Returns:
+    preds: jnp.array of predicted labels
+    accuracy: accuracy as a proportion
+  """
 
   @jit
   def accuracy(y_preds, y_true):
@@ -100,8 +171,6 @@ def predict(
   for label in jnp.unique(y):
     y_sgl = jnp.full(y.shape, label)
     X_t = overlay(X, y_sgl)
-
-
     activations = []
 
     # Get First Layer Activations

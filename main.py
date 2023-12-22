@@ -8,6 +8,16 @@ from mlx.utils import tree_flatten
 from keras.datasets import mnist
 
 
+@dataclass
+class TrainingParams:
+    model_path: str = "/Users/harryjulian/Projects/forward-forward/mlx"
+    layer_dims: list[str] = field(default_factory=lambda: [784, 500, 500])
+    epochs: int = 1000
+    batch_size: int = 10000
+    learning_rate: float = 0.03
+    theta: float = 2.0
+
+
 def mlx_norm(x):
     """Equivalent to np.linalg.norm(axis=-1, ord=2)"""
     return mx.sqrt(mx.sum(mx.square(x), axis=-1))
@@ -15,17 +25,6 @@ def mlx_norm(x):
 
 def mlx_repeat(x, n):
     return mx.concatenate([x.reshape(1, -1) for _ in range(n)])
-
-
-@dataclass
-class TrainingParams:
-    model_path: str = "/Users/harryjulian/Projects/forward-forward/mlx"
-    layer_dims: list[str] = field(default_factory=lambda: [784, 500, 500])
-    epochs: int = 100
-    batch_size: int = 10000
-    learning_rate: float = 0.03
-    theta: float = 2.0
-    steps_per_report: int = 10
 
 
 def overlay_particular_label(X, l):
@@ -76,17 +75,13 @@ def train_layer(layer, X_pos, X_neg, config):
     losses = []
 
     for epoch in range(config.epochs):
-        print(f"Starting epoch {epoch+1}")
-
-        for (idx, (X_pos_batch, X_neg_batch)) in enumerate(
-            batch_generator(X_pos, X_neg, config.batch_size)
-        ):
+        for (X_pos_batch, X_neg_batch) in batch_generator(X_pos, X_neg, config.batch_size):
             loss_val, grads = loss_value_and_grad(layer, X_pos_batch, X_neg_batch, config.theta)
             optimiser.update(layer, grads)
-            mx.eval(layer.parameters(), optimiser.state)#, #loss_val)
+            mx.eval(layer.parameters(), optimiser.state)
             losses.append(loss_val)
 
-        print(f"Loss val: {losses[-1].item():.3f}")
+        print(f"Epoch {epoch+1} final val: {losses[-1].item():.3f}")
 
     return layer
 
@@ -125,9 +120,10 @@ class ForwardForwardNetwork(nn.Module):
             x_overlayed = overlay_particular_label(x, label)
             goodness = 0
             for layer in self.layers:
-                goodness += layer(x_overlayed)
+                x_overlayed = layer(x_overlayed)
+                goodness += mx.mean(mx.power(x_overlayed, 2), axis = 1)
             labelwise_goodness.append(goodness)
-        return mx.argmax(labelwise_goodness)
+        return mx.argmax(mx.stack(labelwise_goodness), axis=0)
 
 
 if __name__ == "__main__":
@@ -140,8 +136,6 @@ if __name__ == "__main__":
 
     print("Initializing model")
     model = ForwardForwardNetwork(784, 500, 500, 2)
-    for l in model.layers:
-        print(l)
     p = sum(v.size for _, v in tree_flatten(model.trainable_parameters())) / 10**6
     print(f"Trainable parameters {p:.3f}M")
 
@@ -152,9 +146,10 @@ if __name__ == "__main__":
         X_train_pos, X_train_neg = layer(X_train_pos), layer(X_train_neg)
     
     print("Evalutating model")
-    #y_preds = model(X_test)
-    #n_correct = mx.sum(mx.where(y_test == y_preds, 1, 0))
-  #  print(f"Final model has an accuracy of {n_correct / len(X_test) * 100:.3f}")
+    y_preds = model(mx.array(X_test))
+    n_correct = mx.sum(mx.where(mx.array(y_test) == y_preds, 1, 0))
+    accuracy = n_correct.item() / len(X_test) * 100
+    print(f"Final model has an accuracy of {accuracy:.2f}%")
 
     print("Saving model")
-   # mx.savez(os.path.join(os.getcwd(), "weights.npz"), **dict(tree_flatten(model.trainable_parameters())))
+    mx.savez(os.path.join(os.getcwd(), "weights.npz"), **dict(tree_flatten(model.trainable_parameters())))

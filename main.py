@@ -1,21 +1,31 @@
-from dataclasses import dataclass, field
-import numpy as np
 import os
+from dataclasses import dataclass
+import numpy as np
+from keras.datasets import mnist
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 from mlx.utils import tree_flatten
-from keras.datasets import mnist
+
+
+# one-hot encoding
+# create negative data same way as hinton
+# symba
+# other loss funcs
 
 
 @dataclass
 class TrainingParams:
-    model_path: str = "/Users/harryjulian/Projects/forward-forward/mlx"
-    layer_dims: list[str] = field(default_factory=lambda: [784, 500, 500])
-    epochs: int = 1000
-    batch_size: int = 10000
-    learning_rate: float = 0.03
+    model_path: str = os.getcwd()
+    in_dims: int = 784
+    hidden_dims: int = 500
+    out_dims: int = 500
+    n_layers: int = 2
+    epochs: int = 500
+    batch_size: int = 25000
+    learning_rate: float = 0.05
     theta: float = 2.0
+    eps: float = 1e-8
 
 
 def mlx_norm(x):
@@ -75,7 +85,9 @@ def train_layer(layer, X_pos, X_neg, config):
     losses = []
 
     for epoch in range(config.epochs):
-        for (X_pos_batch, X_neg_batch) in batch_generator(X_pos, X_neg, config.batch_size):
+        print(f"Starting epoch {epoch+1}")
+
+        for X_pos_batch, X_neg_batch in batch_generator(X_pos, X_neg, config.batch_size):
             loss_val, grads = loss_value_and_grad(layer, X_pos_batch, X_neg_batch, config.theta)
             optimiser.update(layer, grads)
             mx.eval(layer.parameters(), optimiser.state)
@@ -87,30 +99,31 @@ def train_layer(layer, X_pos, X_neg, config):
 
 
 class ForwardForwardLayer(nn.Module):
-    def __init__(self, hidden_size: int, out_size: int):
+    def __init__(self, hidden_size: int, out_size: int, eps: float = 1e-8):
         super().__init__()
         self.linear = nn.Linear(hidden_size, out_size)
+        self.eps = eps
 
     def __call__(self, x):
         a = nn.relu(self.linear(self._normalize(x)))
         return a
 
-    def _normalize(self, x):
+    def _normalize(self, x, eps: float = 1e-8):
         shape = x.shape
         x_flatten = x.reshape(shape[0], -1)
         x_div = mlx_norm(x_flatten)
         x_div = mlx_repeat(x_div.reshape(1, -1), shape[1]).T
-        return x_flatten / (x_div + 1e-8)
+        return x_flatten / (x_div + self.eps)
     
 
 class ForwardForwardNetwork(nn.Module):
 
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+    def __init__(self, config):
         super().__init__()
-        layer_sizes = [input_dim] + [hidden_dim] * num_layers + [output_dim]
+        layer_sizes = [config.in_dims] + [config.hidden_dims] * config.n_layers + [config.out_dims]
         self.layers = [
             ForwardForwardLayer(
-                idim, odim
+                idim, odim, config.eps
             ) for idim, odim in zip(layer_sizes[:-1], layer_sizes[1:])
         ]
 
@@ -135,6 +148,7 @@ if __name__ == "__main__":
     X_train_pos, X_train_neg, y_train, X_test, y_test = load_mnist()
 
     print("Initializing model")
+    model = ForwardForwardNetwork(config)
     model = ForwardForwardNetwork(784, 500, 500, 2)
     p = sum(v.size for _, v in tree_flatten(model.trainable_parameters())) / 10**6
     print(f"Trainable parameters {p:.3f}M")

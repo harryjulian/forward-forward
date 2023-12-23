@@ -149,7 +149,6 @@ if __name__ == "__main__":
 
     print("Initializing model")
     model = ForwardForwardNetwork(config)
-    model = ForwardForwardNetwork(784, 500, 500, 2)
     p = sum(v.size for _, v in tree_flatten(model.trainable_parameters())) / 10**6
     print(f"Trainable parameters {p:.3f}M")
 

@@ -29,16 +29,16 @@ class TrainingParams:
     hidden_dims: int = 500
     out_dims: int = 500
     n_layers: int = 2
-    eps: float = 1e-8
+    eps: float = 1e-4
 
     # Training Params
-    epochs: int = 10
-    batch_size: int = 25000
-    learning_rate: float = 0.05
+    epochs: int = 100
+    batch_size: int = 12500
+    learning_rate: float = 0.03
 
     # Algorithm Params
-    encoding_method: EncodingMethod = "true_label"
-    loss_fn: LossFunction = "standard"
+    encoding_method: EncodingMethod = "one_hot"
+    loss_fn: LossFunction = "symba"
     goodness_fn: GoodnessFunction = "sum_of_squares"
     activation_fn: ActivationFunction = "relu"    
 
@@ -74,7 +74,7 @@ def load_mnist():
 def generate_one_hot(n_labels):
     encodings = np.zeros((n_labels, n_labels))
     np.fill_diagonal(encodings, 1)
-    return mx.array(encodings)
+    return mx.array(encodings).astype(mx.float32)
 
 
 def generate_icp(in_dims: int = 768, n_classes: int = 10, sampling_rate: float = 0.1):
@@ -87,6 +87,7 @@ def apply_encoding(X, y, encoding_method: EncodingMethod, encoding: Optional[mx.
             X[:, :10] = mlx_repeat(y, 10).T
             return X
         case "one_hot":
+            X[:, :10] *= 0
             X[:, :10] = encoding[y.astype(mx.uint8)]
             return X
         case "icp":
@@ -103,12 +104,14 @@ def batch_generator(X_pos, X_neg, batch_size):
 
 
 def loss_standard(layer, X_pos, X_neg, theta: float = 2.0):
+    """Loss function proposed in Hinton (2022)."""
     g_pos = mx.mean(mx.power(layer(X_pos), 2), axis = 1)
     g_neg = mx.mean(mx.power(layer(X_neg), 2), axis = 1)
     return mx.log(1 + mx.exp(((-g_pos + theta) + (g_neg - theta)))).mean()
 
 
 def loss_symba(layer, X_pos, X_neg, alpha: float = 4.0):
+    """SymBa Loss function, proposed in Lee and Song (2023)."""
     g_pos = mx.mean(mx.power(layer(X_pos), 2), axis = 1)
     g_neg = mx.mean(mx.power(layer(X_neg), 2), axis = 1)
     delta = g_pos - g_neg
@@ -144,7 +147,7 @@ def train_layer(layer, X_pos, X_neg, config):
 
 
 class ForwardForwardLayer(nn.Module):
-    def __init__(self, hidden_size: int, out_size: int, eps: float = 1e-8):
+    def __init__(self, hidden_size: int, out_size: int, eps: float = 1e-4):
         super().__init__()
         self.linear = nn.Linear(hidden_size, out_size)
         self.eps = eps
@@ -154,12 +157,9 @@ class ForwardForwardLayer(nn.Module):
         return a
 
     def _normalize(self, x):
-        shape = x.shape
-        x_flatten = x.reshape(shape[0], -1)
-        x_div = mlx_norm(x_flatten)
-        x_div = mlx_repeat(x_div.reshape(1, -1), shape[1]).T
-        return x_flatten / (x_div + self.eps)
-    
+        x_norm = mlx_repeat(mlx_norm(x).reshape(1, -1), x.shape[1]).T
+        return x / (x_norm + self.eps)
+
 
 class ForwardForwardNetwork(nn.Module):
 
@@ -179,9 +179,11 @@ class ForwardForwardNetwork(nn.Module):
         for label in range(10):
             x_overlayed = apply_encoding(x, mx.full((x.shape[0]), label), self.encoding_method, self.encodings)
             goodness = 0
-            for layer in self.layers:
+            for idx, layer in enumerate(self.layers):
                 x_overlayed = layer(x_overlayed)
-                goodness += mx.mean(mx.power(x_overlayed, 2), axis = 1)
+                match idx:
+                    case 0: continue
+                    case _: goodness += mx.mean(mx.power(x_overlayed, 2), axis = 1)
             labelwise_goodness.append(goodness)
         return mx.argmax(mx.stack(labelwise_goodness), axis=0)
 
@@ -202,7 +204,6 @@ if __name__ == "__main__":
             encodings = None
         case "one_hot":
             encodings = generate_one_hot(config.n_labels)
-            print(encodings)
         case "icp":
             encodings = generate_icp(config.in_dims, config.n_labels)
         case _:
@@ -211,7 +212,6 @@ if __name__ == "__main__":
     print("Creating Positive and Negative data")
     X_train_pos = apply_encoding(X_train_pos, y_train, config.encoding_method, encodings)
     X_train_neg = apply_encoding(X_train_neg, y_train_shuffled, config.encoding_method, encodings)
-    assert not np.array_equal(np.array(X_train_pos), np.array(X_train_neg))
 
     print("Initializing model")
     model = ForwardForwardNetwork(config, encodings)
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         X_train_pos, X_train_neg = layer(X_train_pos), layer(X_train_neg)
     
     print("Evalutating model")
-    y_preds = model(mx.array(X_test))
+    y_preds = model(X_test)
     n_correct = mx.sum(mx.where(mx.array(y_test) == y_preds, 1, 0))
     accuracy = n_correct.item() / len(X_test) * 100
     print(f"Final model has an accuracy of {accuracy:.2f}%")
